@@ -1,96 +1,184 @@
-"""MacroVerse — interactive World Bank macroeconomic dashboard.
-
-Run with: python -m streamlit run streamlit_app.py
-"""
-import io
-from concurrent.futures import ThreadPoolExecutor
-
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import requests
 import streamlit as st
+import pandas as pd
+import requests
+import plotly.express as px
 
-st.set_page_config(
-    page_title="MacroVerse | Global Economic Intelligence",
-    page_icon="🌐",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
+st.set_page_config(page_title="Macroverse", layout="wide")
+
+WB_BASE = "https://api.worldbank.org/v2"
 
 INDICATORS = {
-    "GDP (current US$)": ("NY.GDP.MKTP.CD", "US$", "Economic output"),
-    "GDP growth (annual %)": ("NY.GDP.MKTP.KD.ZG", "%", "Growth"),
-    "GDP per capita (current US$)": ("NY.GDP.PCAP.CD", "US$", "Living standards"),
-    "Inflation, consumer prices (%)": ("FP.CPI.TOTL.ZG", "%", "Prices"),
-    "Unemployment (% of labour force)": ("SL.UEM.TOTL.ZS", "%", "Labour market"),
-    "Government debt (% of GDP)": ("GC.DOD.TOTL.GD.ZS", "%", "Public finance"),
-    "Government balance (% of GDP)": ("GC.BAL.CASH.GD.ZS", "%", "Public finance"),
-    "Population": ("SP.POP.TOTL", "people", "Demographics"),
-    "Trade (% of GDP)": ("NE.TRD.GNFS.ZS", "%", "External sector"),
-    "FDI, net inflows (% of GDP)": ("BX.KLT.DINV.WD.GD.ZS", "%", "Investment"),
-    "CO₂ emissions (tonnes per capita)": ("EN.GHG.CO2.PC.CE.AR5", "t/person", "Climate"),
-    "Renewable electricity output (%)": ("EG.ELC.RNEW.ZS", "%", "Climate"),
+    "Crescita del PIL (%)": "NY.GDP.MKTP.KD.ZG",
+    "Inflazione, prezzi al consumo (%)": "FP.CPI.TOTL.ZG",
+    "Debito pubblico centrale / PIL (%)": "GC.DOD.TOTL.GD.ZS",
+    "Disoccupazione (%)": "SL.UEM.TOTL.ZS",
+    "PIL pro capite (US$ correnti)": "NY.GDP.PCAP.CD",
 }
 
-st.markdown("""
-<style>
-.block-container {max-width: 1450px; padding-top: 1.15rem; padding-bottom: 3rem;}
-[data-testid="stSidebar"] {background: #172334;}
-[data-testid="stSidebar"] * {color: #f1f5f9;}
-.mv-eyebrow {font-size: .78rem; text-transform: uppercase; letter-spacing: .13em; color: #698aaa; font-weight: 700;}
-.mv-heading {font-size: 2.45rem; font-weight: 780; letter-spacing: -.05em; line-height: 1.1; margin: .15rem 0 .3rem;}
-.mv-subtitle {color: #8392a9; font-size: .97rem; margin-bottom: 1rem;}
-.mv-section {font-size: 1.16rem; font-weight: 700; margin: .35rem 0 .25rem;}
-[data-testid="stMetric"] {border: 1px solid rgba(120,140,160,.24); border-radius: 12px; padding: 13px 17px; background: rgba(100,130,160,.06);}
-[data-testid="stMetricLabel"] {font-size: .88rem;}
-[data-testid="stMetricValue"] {font-size: 1.55rem;}
-div[data-testid="stPlotlyChart"] {border: 1px solid rgba(120,140,160,.20); border-radius: 12px; padding: 6px;}
-</style>
-""", unsafe_allow_html=True)
-
-API = "https://api.worldbank.org/v2"
-
-
-def world_bank(path, params=None):
-    options = {"format": "json", "per_page": 20000}
-    options.update(params or {})
-    response = requests.get(f"{API}/{path}", params=options, timeout=35)
-    response.raise_for_status()
-    payload = response.json()
-    if not isinstance(payload, list) or len(payload) < 2 or not isinstance(payload[1], list):
-        raise ValueError("The World Bank API did not return a valid dataset.")
-    return payload[1]
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def countries():
-    raw = world_bank("country", {"per_page": 400})
-    values = []
-    for x in raw:
-        region = x.get("region") or {}
-        # World Bank uses NA for aggregate regions (not North America).
-        if region.get("id") == "NA":
+# --------------------------------------------------------------------------
+# DATA LOADING FROM WORLD BANK API
+# --------------------------------------------------------------------------
+@st.cache_data(ttl=60 * 60 * 24, show_spinner="Carico l'elenco paesi...")
+def load_countries():
+    url = f"{WB_BASE}/country?format=json&per_page=400"
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    rows = resp.json()[1]
+    data = []
+    for r in rows:
+        # escludi aggregati regionali (non hanno capitale/id a 3 lettere di un vero paese)
+        if r["region"]["value"] == "Aggregates":
             continue
-        iso3 = x.get("id")
-        if iso3 and len(iso3) == 3:
-            values.append({
-                "iso3": iso3,
-                "country": x.get("name", iso3),
-                "region": region.get("value", "Other"),
-                "income": (x.get("incomeLevel") or {}).get("value", "Unknown"),
-            })
-    if not values:
-        raise ValueError("No country metadata found.")
-    return pd.DataFrame(values)
+        data.append(
+            {
+                "iso_3": r["id"],
+                "country": r["name"],
+                "region": r["region"]["value"],
+                "income_group": r["incomeLevel"]["value"],
+            }
+        )
+    return pd.DataFrame(data)
 
 
-@st.cache_data(ttl=43200, show_spinner=False)
-def indicator_data(code, first_year=2000, last_year=2025):
-    raw = world_bank(f"country/all/indicator/{code}", {"date": f"{first_year}:{last_year}"})
-    rows = []
-    for x in raw:
-        value = x.get("value")
-        if value is None:
-            continue
-        country = x.get("country") or {}
+@st.cache_data(ttl=60 * 60 * 24, show_spinner="Scarico i dati dalla World Bank API...")
+def load_indicator(indicator_code, start_year=2000, end_year=2025):
+    url = (
+        f"{WB_BASE}/country/all/indicator/{indicator_code}"
+        f"?format=json&per_page=20000&date={start_year}:{end_year}"
+    )
+    resp = requests.get(url, timeout=60)
+    resp.raise_for_status()
+    payload = resp.json()
+    if len(payload) < 2 or payload[1] is None:
+        return pd.DataFrame(columns=["iso_3", "year", "value"])
+    rows = payload[1]
+    data = [
+        {"iso_3": r["countryiso3code"], "year": int(r["date"]), "value": r["value"]}
+        for r in rows
+        if r["countryiso3code"]
+    ]
+    return pd.DataFrame(data)
+
+
+countries_df = load_countries()
+
+# --------------------------------------------------------------------------
+# SIDEBAR - FILTERS
+# --------------------------------------------------------------------------
+st.sidebar.title("Macroverse")
+st.sidebar.caption("Dati macroeconomici live — World Bank API")
+
+metric_label = st.sidebar.selectbox("Indicatore", list(INDICATORS.keys()))
+indicator_code = INDICATORS[metric_label]
+
+year = st.sidebar.slider("Anno", min_value=2000, max_value=2025, value=2023)
+
+regions = sorted(countries_df["region"].dropna().unique())
+selected_regions = st.sidebar.multiselect("Regione", regions, default=regions)
+
+income_groups = sorted(countries_df["income_group"].dropna().unique())
+selected_income = st.sidebar.multiselect(
+    "Fascia di reddito", income_groups, default=income_groups
+)
+
+countries_filtered = countries_df[
+    countries_df["region"].isin(selected_regions)
+    & countries_df["income_group"].isin(selected_income)
+]
+
+indicator_df = load_indicator(indicator_code)
+df = countries_filtered.merge(indicator_df, on="iso_3", how="left")
+df_year = df[df["year"] == year]
+
+# --------------------------------------------------------------------------
+# HEADER
+# --------------------------------------------------------------------------
+st.title("🌍 Macroverse — Dashboard macroeconomico globale")
+st.markdown(f"**{metric_label}** · anno **{year}** · fonte: World Bank Open Data API")
+
+# --------------------------------------------------------------------------
+# KPI ROW
+# --------------------------------------------------------------------------
+valid = df_year["value"].dropna()
+col1, col2, col3, col4 = st.columns(4)
+col1.metric("Paesi con dato", valid.shape[0])
+col2.metric("Media", f"{valid.mean():.2f}" if not valid.empty else "—")
+col3.metric("Mediana", f"{valid.median():.2f}" if not valid.empty else "—")
+col4.metric("Dev. standard", f"{valid.std():.2f}" if not valid.empty else "—")
+
+st.divider()
+
+# --------------------------------------------------------------------------
+# WORLD MAP
+# --------------------------------------------------------------------------
+st.subheader(f"Mappa mondiale — {metric_label} ({year})")
+
+fig_map = px.choropleth(
+    df_year,
+    locations="iso_3",
+    color="value",
+    hover_name="country",
+    hover_data={"value": True, "region": True, "income_group": True, "iso_3": False},
+    color_continuous_scale="Viridis",
+    projection="natural earth",
+    labels={"value": metric_label},
+)
+fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=500)
+st.plotly_chart(fig_map, use_container_width=True)
+
+st.divider()
+
+# --------------------------------------------------------------------------
+# TIME SERIES
+# --------------------------------------------------------------------------
+st.subheader(f"Andamento nel tempo — {metric_label}")
+
+default_countries = (
+    countries_filtered.sort_values("country")["country"].unique()[:5].tolist()
+)
+countries_sel = st.multiselect(
+    "Seleziona paesi da confrontare",
+    sorted(countries_filtered["country"].dropna().unique()),
+    default=default_countries,
+)
+
+if countries_sel:
+    df_ts = df[df["country"].isin(countries_sel)]
+    fig_ts = px.line(
+        df_ts.sort_values("year"),
+        x="year",
+        y="value",
+        color="country",
+        markers=True,
+        labels={"value": metric_label, "year": "Anno"},
+    )
+    fig_ts.update_layout(height=450)
+    st.plotly_chart(fig_ts, use_container_width=True)
+else:
+    st.info("Seleziona almeno un paese per vedere la serie storica.")
+
+st.divider()
+
+# --------------------------------------------------------------------------
+# RANKING TABLE
+# --------------------------------------------------------------------------
+st.subheader(f"Classifica paesi — {metric_label} ({year})")
+
+df_rank = (
+    df_year[["country", "region", "income_group", "value"]]
+    .dropna(subset=["value"])
+    .sort_values("value", ascending=False)
+    .rename(columns={"value": metric_label})
+    .reset_index(drop=True)
+)
+df_rank.index += 1
+st.dataframe(df_rank, use_container_width=True)
+
+csv = df_rank.to_csv(index=True).encode("utf-8")
+st.download_button(
+    "⬇️ Scarica classifica (CSV)",
+    csv,
+    file_name=f"macroverse_{indicator_code}_{year}.csv",
+)
+
+st.caption("Dati: World Bank Open Data API (api.worldbank.org). Alcuni paesi/anni possono non avere dati disponibili.")
