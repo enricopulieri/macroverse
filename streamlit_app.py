@@ -95,7 +95,7 @@ full_df = load_all_indicators(countries_df)
 # --------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 🌍 Macroverse")
-    st.caption("Global Economic Intelligence Dashboard")
+    st.caption("Global Economic Dashboard")
     st.divider()
 
     st.markdown("**YEARS**")
