@@ -137,7 +137,7 @@ n_countries = df["country"].nunique()
 # --------------------------------------------------------------------------
 # HEADER
 # --------------------------------------------------------------------------
-st.markdown("## GLOBAL ECONOMIC INTELLIGENCE DASHBOARD")
+st.markdown("## GLOBAL ECONOMIC DASHBOARD")
 st.caption(
     f"{n_countries} countries selected · Period: {min(years_selected)}-{max(years_selected)} "
     f"· Latest year: {latest_year}"
