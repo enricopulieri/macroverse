@@ -8,17 +8,17 @@ st.set_page_config(page_title="Macroverse", layout="wide")
 WB_BASE = "https://api.worldbank.org/v2"
 
 INDICATORS = {
-    "Crescita del PIL (%)": "NY.GDP.MKTP.KD.ZG",
-    "Inflazione, prezzi al consumo (%)": "FP.CPI.TOTL.ZG",
-    "Debito pubblico centrale / PIL (%)": "GC.DOD.TOTL.GD.ZS",
-    "Disoccupazione (%)": "SL.UEM.TOTL.ZS",
-    "PIL pro capite (US$ correnti)": "NY.GDP.PCAP.CD",
+    "GDP Growth (%)": "NY.GDP.MKTP.KD.ZG",
+    "Inflation, Consumer Prices (%)": "FP.CPI.TOTL.ZG",
+    "Central Government Debt / GDP (%)": "GC.DOD.TOTL.GD.ZS",
+    "Unemployment (%)": "SL.UEM.TOTL.ZS",
+    "GDP per Capita (current US$)": "NY.GDP.PCAP.CD",
 }
 
 # --------------------------------------------------------------------------
 # DATA LOADING FROM WORLD BANK API
 # --------------------------------------------------------------------------
-@st.cache_data(ttl=60 * 60 * 24, show_spinner="Carico l'elenco paesi...")
+@st.cache_data(ttl=60 * 60 * 24, show_spinner="Loading country list...")
 def load_countries():
     url = f"{WB_BASE}/country?format=json&per_page=400"
     resp = requests.get(url, timeout=30)
@@ -26,7 +26,7 @@ def load_countries():
     rows = resp.json()[1]
     data = []
     for r in rows:
-        # escludi aggregati regionali (non hanno capitale/id a 3 lettere di un vero paese)
+        # exclude regional aggregates (not actual countries)
         if r["region"]["value"] == "Aggregates":
             continue
         data.append(
@@ -40,7 +40,7 @@ def load_countries():
     return pd.DataFrame(data)
 
 
-@st.cache_data(ttl=60 * 60 * 24, show_spinner="Scarico i dati dalla World Bank API...")
+@st.cache_data(ttl=60 * 60 * 24, show_spinner="Fetching data from the World Bank API...")
 def load_indicator(indicator_code, start_year=2000, end_year=2025):
     url = (
         f"{WB_BASE}/country/all/indicator/{indicator_code}"
@@ -66,19 +66,19 @@ countries_df = load_countries()
 # SIDEBAR - FILTERS
 # --------------------------------------------------------------------------
 st.sidebar.title("Macroverse")
-st.sidebar.caption("Dati macroeconomici live — World Bank API")
+st.sidebar.caption("Live macroeconomic data — World Bank API")
 
-metric_label = st.sidebar.selectbox("Indicatore", list(INDICATORS.keys()))
+metric_label = st.sidebar.selectbox("Indicator", list(INDICATORS.keys()))
 indicator_code = INDICATORS[metric_label]
 
-year = st.sidebar.slider("Anno", min_value=2000, max_value=2025, value=2023)
+year = st.sidebar.slider("Year", min_value=2000, max_value=2025, value=2023)
 
 regions = sorted(countries_df["region"].dropna().unique())
-selected_regions = st.sidebar.multiselect("Regione", regions, default=regions)
+selected_regions = st.sidebar.multiselect("Region", regions, default=regions)
 
 income_groups = sorted(countries_df["income_group"].dropna().unique())
 selected_income = st.sidebar.multiselect(
-    "Fascia di reddito", income_groups, default=income_groups
+    "Income Group", income_groups, default=income_groups
 )
 
 countries_filtered = countries_df[
@@ -93,25 +93,25 @@ df_year = df[df["year"] == year]
 # --------------------------------------------------------------------------
 # HEADER
 # --------------------------------------------------------------------------
-st.title("🌍 Macroverse — Dashboard macroeconomico globale")
-st.markdown(f"**{metric_label}** · anno **{year}** · fonte: World Bank Open Data API")
+st.title("🌍 Macroverse — Global Macroeconomic Dashboard")
+st.markdown(f"**{metric_label}** · year **{year}** · source: World Bank Open Data API")
 
 # --------------------------------------------------------------------------
 # KPI ROW
 # --------------------------------------------------------------------------
 valid = df_year["value"].dropna()
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Paesi con dato", valid.shape[0])
-col2.metric("Media", f"{valid.mean():.2f}" if not valid.empty else "—")
-col3.metric("Mediana", f"{valid.median():.2f}" if not valid.empty else "—")
-col4.metric("Dev. standard", f"{valid.std():.2f}" if not valid.empty else "—")
+col1.metric("Countries with data", valid.shape[0])
+col2.metric("Mean", f"{valid.mean():.2f}" if not valid.empty else "—")
+col3.metric("Median", f"{valid.median():.2f}" if not valid.empty else "—")
+col4.metric("Std. deviation", f"{valid.std():.2f}" if not valid.empty else "—")
 
 st.divider()
 
 # --------------------------------------------------------------------------
 # WORLD MAP
 # --------------------------------------------------------------------------
-st.subheader(f"Mappa mondiale — {metric_label} ({year})")
+st.subheader(f"World Map — {metric_label} ({year})")
 
 fig_map = px.choropleth(
     df_year,
@@ -124,20 +124,20 @@ fig_map = px.choropleth(
     labels={"value": metric_label},
 )
 fig_map.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=500)
-st.plotly_chart(fig_map, use_container_width=True)
+st.plotly_chart(fig_map, width="stretch")
 
 st.divider()
 
 # --------------------------------------------------------------------------
 # TIME SERIES
 # --------------------------------------------------------------------------
-st.subheader(f"Andamento nel tempo — {metric_label}")
+st.subheader(f"Trend Over Time — {metric_label}")
 
 default_countries = (
     countries_filtered.sort_values("country")["country"].unique()[:5].tolist()
 )
 countries_sel = st.multiselect(
-    "Seleziona paesi da confrontare",
+    "Select countries to compare",
     sorted(countries_filtered["country"].dropna().unique()),
     default=default_countries,
 )
@@ -150,19 +150,19 @@ if countries_sel:
         y="value",
         color="country",
         markers=True,
-        labels={"value": metric_label, "year": "Anno"},
+        labels={"value": metric_label, "year": "Year"},
     )
     fig_ts.update_layout(height=450)
-    st.plotly_chart(fig_ts, use_container_width=True)
+    st.plotly_chart(fig_ts, width="stretch")
 else:
-    st.info("Seleziona almeno un paese per vedere la serie storica.")
+    st.info("Select at least one country to see the historical trend.")
 
 st.divider()
 
 # --------------------------------------------------------------------------
 # RANKING TABLE
 # --------------------------------------------------------------------------
-st.subheader(f"Classifica paesi — {metric_label} ({year})")
+st.subheader(f"Country Ranking — {metric_label} ({year})")
 
 df_rank = (
     df_year[["country", "region", "income_group", "value"]]
@@ -172,13 +172,13 @@ df_rank = (
     .reset_index(drop=True)
 )
 df_rank.index += 1
-st.dataframe(df_rank, use_container_width=True)
+st.dataframe(df_rank, width="stretch")
 
 csv = df_rank.to_csv(index=True).encode("utf-8")
 st.download_button(
-    "⬇️ Scarica classifica (CSV)",
+    "⬇️ Download Ranking (CSV)",
     csv,
     file_name=f"macroverse_{indicator_code}_{year}.csv",
 )
 
-st.caption("Dati: World Bank Open Data API (api.worldbank.org). Alcuni paesi/anni possono non avere dati disponibili.")
+st.caption("Data: World Bank Open Data API (api.worldbank.org). Some countries/years may not have data available.")
